@@ -70,14 +70,14 @@ class ViewController: UIViewController {
                         self!.currentVelocity = (avgAccel/Double(numberOfIntervals)) * updateInterval
                         
                         // Update user displacement.
-                        self!.updateDisplacement(pV: self!.previousVelocity, cA: self!.currentAcceleration, t: 1.0)
+                        self!.updateDisplacement(pV: self!.previousVelocity, cA: self!.currentAcceleration, t: (updateInterval * Double(numberOfIntervals)))
                         
                         // Update previous velocity to be the current velocity.
                         self!.previousVelocity = self!.currentVelocity
                         
                         // Reset the itereration data.
                         iter = 0
-                        //avgAccel = 0.0
+                        self!.previousAcceleration = avgAccel
                     } else {
                         // Update the itereration data.
                         iter += 1
