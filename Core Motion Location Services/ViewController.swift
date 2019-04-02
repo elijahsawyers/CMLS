@@ -38,9 +38,6 @@ class ViewController: UIViewController {
         // The time intervals between pulling accelerometer data.
         let updateInterval = 0.01
         
-        // The number of intervals to run before averaging the accelerations and updating the user displacement.
-        let numberOfIntervals = 100
-        
         // Initialize the Core Motion package.
         cmManager.deviceMotionUpdateInterval = updateInterval
         cmManager.startDeviceMotionUpdates()
@@ -50,6 +47,8 @@ class ViewController: UIViewController {
         
         // Store the average acceleration over the course of X amount of intervals.
         var avgAccel = 0.0
+        
+        var readingValidData = false
         
         let timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
             // Grab the acceleration information.
@@ -63,28 +62,41 @@ class ViewController: UIViewController {
                 yAccel = phoneYAccel * 9.81
                 
                 // Values less than 0.3 are "junk values" (i.e. the user isn't moving).
-                if yAccel >= 0.30 {
-                    if iter >= numberOfIntervals {
-                        // Set the current acceleration and velocity.
-                        self!.currentAcceleration = (avgAccel/Double(numberOfIntervals))
-                        self!.currentVelocity = (avgAccel/Double(numberOfIntervals)) * updateInterval
-                        
-                        // Update user displacement.
-                        self!.updateDisplacement(pV: self!.previousVelocity, cA: self!.currentAcceleration, t: (updateInterval * Double(numberOfIntervals)))
-                        
-                        // Update previous velocity to be the current velocity.
-                        self!.previousVelocity = self!.currentVelocity
-                        
-                        // Reset the itereration data.
-                        iter = 0
-                        self!.previousAcceleration = avgAccel
+                if yAccel >= 0.30 && self!.previousAcceleration >= 0.30 {
+                    if readingValidData {
+                        // Update the itereration data.
+                        iter += 1
+                        avgAccel += yAccel
                     } else {
                         // Update the itereration data.
                         iter += 1
                         avgAccel += yAccel
+                        readingValidData = true
                     }
+                } else {
+                    if readingValidData {
+                        // Set the current acceleration and velocity.
+                        self!.currentAcceleration = (avgAccel/Double(iter))
+                        self!.currentVelocity = (avgAccel/Double(iter)) * updateInterval
+                    
+                        // Update user displacement.
+                        self!.updateDisplacement(pV: self!.previousVelocity, cA: self!.currentAcceleration, t: (updateInterval * Double(iter)))
+                    
+                        // Update previous velocity to be the current velocity.
+                        self!.previousVelocity = self!.currentVelocity
+                    }
+                    
+                    // No longer valid data.
+                    readingValidData = false
+                    
+                    // Reset the itereration data.
+                    iter = 0
+                    avgAccel = 0.0
                 }
             }
+            
+            // Update previous acceleration.
+            self!.previousAcceleration = yAccel
             
             // Monitor acceleration.
             self!.userAccel.text = "Y: " + String(yAccel)
