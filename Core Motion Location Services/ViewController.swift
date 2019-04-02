@@ -18,27 +18,42 @@ class ViewController: UIViewController {
     let cmManager = CMMotionManager()
     
     /// The time intervals between pulling accelerometer data.
-    let updateInterval = 0.1
+    let updateInterval = 0.01
     
     /// The user's average walking speed.
     var averageVelocity: Double?
     
-    /// The user's average walking velocities.
+    /// The user's average walking velocities pulled during configuration.
     var averageVelocities: [Double] = [] {
         didSet {
             if averageVelocities.count == 3 {
                 averageVelocity = (averageVelocities[0] + averageVelocities[1] + averageVelocities[2])/3.0
                 log.text += "Finished config with avg velocity: \(averageVelocity!)m/s \n"
-                log.text += "Press Walk to track distance"
             }
         }
     }
     
-    /// Is the user configuring?
+    /// Is the user configuring the app?
     var configuring = false
     
-    /// The configuration time.
+    /// The time for one configuration interval.
     var configTime = 0.0
+    
+    /// Avgerage acceleration during configuration.
+    var averageAcceleration = 0.0
+    
+    /// The user's average accelerations pulled during configuration.
+    var averageAccelerations: [Double] = [] {
+        didSet {
+            if averageAccelerations.count == 3 {
+                averageAcceleration = (averageAccelerations[0] + averageAccelerations[1] + averageAccelerations[2])/3.0
+                log.text += "The average acceleration was \(averageAcceleration)\n"
+                log.text += "Press Walk to track distance\n"
+            } else {
+                averageAcceleration = 0.0
+            }
+        }
+    }
     
     /// Timer to configure the user's walking speed.
     var configurationTimer: Timer?
@@ -60,12 +75,23 @@ class ViewController: UIViewController {
         cmManager.startDeviceMotionUpdates()
     }
     
+    /// Used to start the configuration process.
     @IBAction func config(_ sender: UIButton) {
         if !configuring {
             log.text += "Walk 4 meters, and press the config button again when done!\n"
             
+            // Pull accelerometer data for configuration.
             configurationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
                 self!.configTime += 0.1
+                
+                // Grab the acceleration information.
+                let deviceMotion = self!.cmManager.deviceMotion
+                
+                // Grab the user's acceleration.
+                if let phoneYAccel = deviceMotion?.userAcceleration.y {
+                    // Convert G's to m/s^2.
+                    self!.averageAcceleration += (abs(phoneYAccel) * 9.81)
+                }
             }
             
             configuring = true
@@ -76,12 +102,14 @@ class ViewController: UIViewController {
             log.text += "You walked \(4.0 / configTime)m/s!\n"
             
             averageVelocities.append(4.0 / configTime)
+            averageAccelerations.append(averageAcceleration/(configTime/0.1))
             
             configuring = false
             configTime = 0.0
         }
     }
     
+    /// Start tracking user displacement.
     @IBAction func updatePosition(_ sender: UIButton) {
         
         walking = !walking
@@ -100,8 +128,8 @@ class ViewController: UIViewController {
                     // Convert G's to m/s^2.
                     yAccel = phoneYAccel * 9.81
                     
-                    // Values less than 0.5 are "junk values" (i.e. the user isn't moving).
-                    if abs(yAccel) >= 0.35 {
+                    // Values less than a quarter of the average acceleration from configuration are "junk values" (i.e. the user isn't moving).
+                    if abs(yAccel) >= (self!.averageAcceleration * 0.25) {
                         self!.log.text = "Now walking!\n"
                         self!.userDisplacement += (self!.updateInterval * self!.averageVelocity!)
                     } else {
@@ -116,10 +144,6 @@ class ViewController: UIViewController {
             walkingTimer?.invalidate()
             userDisplacement = 0.0
         }
-    }
-    
-    func updateDisplacement(pV: Double, cA: Double, t: Double) {
-        userDisplacement += (pV * t) + (0.5 * cA * (t * t))
     }
 
 }
