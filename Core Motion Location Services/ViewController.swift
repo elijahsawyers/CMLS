@@ -12,88 +12,110 @@ import CoreMotion
 class ViewController: UIViewController {
     
     @IBOutlet weak var displacement: UILabel!
-    @IBOutlet weak var userAccel: UILabel!
+    @IBOutlet weak var log: UITextView!
     
     /// Manages all Core Motion services.
     let cmManager = CMMotionManager()
     
-    /// Previous velocity.
-    var previousVelocity = 0.0
+    /// The time intervals between pulling accelerometer data.
+    let updateInterval = 0.1
     
-    /// Current velocity.
-    var currentVelocity = 0.0
+    /// The user's average walking speed.
+    var averageVelocity: Double?
     
-    /// Previous acceleration.
-    var previousAcceleration = 0.0
+    /// The user's average walking velocities.
+    var averageVelocities: [Double] = [] {
+        didSet {
+            if averageVelocities.count == 3 {
+                averageVelocity = (averageVelocities[0] + averageVelocities[1] + averageVelocities[2])/3.0
+                log.text += "Finished config with avg velocity: \(averageVelocity!)m/s \n"
+                log.text += "Press Walk to track distance"
+            }
+        }
+    }
     
-    /// Current acceleration.
-    var currentAcceleration = 0.0
+    /// Is the user configuring?
+    var configuring = false
+    
+    /// The configuration time.
+    var configTime = 0.0
+    
+    /// Timer to configure the user's walking speed.
+    var configurationTimer: Timer?
     
     /// Stores the user's displacement.
     var userDisplacement = 0.0
+    
+    /// Is the user tracking their walking?
+    var walking = false
+    
+    /// Holds timer that tracks walking.
+    var walkingTimer: Timer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         
-        // The time intervals between pulling accelerometer data.
-        let updateInterval = 0.01
-        
-        // The number of intervals to run before averaging the accelerations and updating the user displacement.
-        let numberOfIntervals = 100
-        
         // Initialize the Core Motion package.
         cmManager.deviceMotionUpdateInterval = updateInterval
         cmManager.startDeviceMotionUpdates()
-        
-        // Keep track of which iteration we're currently on.
-        var iter = 0
-        
-        // Store the average acceleration over the course of X amount of intervals.
-        var avgAccel = 0.0
-        
-        let timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
-            // Grab the acceleration information.
-            let deviceMotion = self!.cmManager.deviceMotion
+    }
+    
+    @IBAction func config(_ sender: UIButton) {
+        if !configuring {
+            log.text += "Walk 4 meters, and press the config button again when done!\n"
             
-            // Phone acceleration in the "y" direction.
-            var yAccel = 0.0
-            
-            if let phoneYAccel = deviceMotion?.userAcceleration.y {
-                // Convert G's to m/s^2.
-                yAccel = phoneYAccel * 9.81
-                
-                // Values less than 0.3 are "junk values" (i.e. the user isn't moving).
-                if yAccel >= 0.30 {
-                    if iter >= numberOfIntervals {
-                        // Set the current acceleration and velocity.
-                        self!.currentAcceleration = (avgAccel/Double(numberOfIntervals))
-                        self!.currentVelocity = (avgAccel/Double(numberOfIntervals)) * updateInterval
-                        
-                        // Update user displacement.
-                        self!.updateDisplacement(pV: self!.previousVelocity, cA: self!.currentAcceleration, t: (updateInterval * Double(numberOfIntervals)))
-                        
-                        // Update previous velocity to be the current velocity.
-                        self!.previousVelocity = self!.currentVelocity
-                        
-                        // Reset the itereration data.
-                        iter = 0
-                        self!.previousAcceleration = avgAccel
-                    } else {
-                        // Update the itereration data.
-                        iter += 1
-                        avgAccel += yAccel
-                    }
-                }
+            configurationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                self!.configTime += 0.1
             }
             
-            // Monitor acceleration.
-            self!.userAccel.text = "Y: " + String(yAccel)
+            configuring = true
+        } else {
+            configurationTimer!.invalidate()
+            configurationTimer = nil
             
-            // Monitor acceleration.
-            self!.displacement.text = String(self!.userDisplacement)
+            log.text += "You walked \(4.0 / configTime)m/s!\n"
             
+            averageVelocities.append(4.0 / configTime)
+            
+            configuring = false
+            configTime = 0.0
         }
-        timer.fire()
+    }
+    
+    @IBAction func updatePosition(_ sender: UIButton) {
+        
+        walking = !walking
+        
+        if walking {
+            userDisplacement = 0.0
+            walkingTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
+                // Grab the acceleration information.
+                let deviceMotion = self!.cmManager.deviceMotion
+                
+                // Phone acceleration in the "y" direction.
+                var yAccel = 0.0
+                
+                // Grab the user's acceleration.
+                if let phoneYAccel = deviceMotion?.userAcceleration.y {
+                    // Convert G's to m/s^2.
+                    yAccel = phoneYAccel * 9.81
+                    
+                    // Values less than 0.5 are "junk values" (i.e. the user isn't moving).
+                    if abs(yAccel) >= 0.35 {
+                        self!.log.text = "Now walking!\n"
+                        self!.userDisplacement += (self!.updateInterval * self!.averageVelocity!)
+                    } else {
+                        self!.log.text = "No longer walking!\n"
+                    }
+                }
+                
+                // Monitor acceleration.
+                self!.displacement.text = String(self!.userDisplacement)
+            }
+        } else {
+            walkingTimer?.invalidate()
+            userDisplacement = 0.0
+        }
     }
     
     func updateDisplacement(pV: Double, cA: Double, t: Double) {
