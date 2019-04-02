@@ -12,7 +12,7 @@ import CoreMotion
 class ViewController: UIViewController {
     
     @IBOutlet weak var displacement: UILabel!
-    @IBOutlet weak var userAccel: UILabel!
+    @IBOutlet weak var log: UITextView!
     
     /// Manages all Core Motion services.
     let cmManager = CMMotionManager()
