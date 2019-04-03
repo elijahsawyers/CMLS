@@ -75,6 +75,18 @@ class ViewController: UIViewController {
         cmManager.startDeviceMotionUpdates()
     }
     
+    func weightedMovingAverage(values: [Double]) -> Double {
+        var numerator = 0.0
+        var denomenator = 0.0
+        
+        for i in 0..<values.count {
+            numerator += Double(i + 1) * values[i]
+            denomenator += Double(i + 1)
+        }
+        
+        return (numerator/denomenator)
+    }
+    
     /// Used to start the configuration process.
     @IBAction func config(_ sender: UIButton) {
         if !configuring {
@@ -109,42 +121,92 @@ class ViewController: UIViewController {
         }
     }
     
-    /// Start tracking user displacement.
-    @IBAction func updatePosition(_ sender: UIButton) {
+    @IBAction func walk(_ sender: Any) {
+        log.text = ""
         
-        walking = !walking
+        // Walking.
+        var walking = false
         
-        if walking {
-            userDisplacement = 0.0
-            walkingTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
-                // Grab the acceleration information.
-                let deviceMotion = self!.cmManager.deviceMotion
+        // Previous acceleration.
+        var previousAcceleration: Vector?
+        
+        // Iterations over 0.8 wma.
+        var iOverWma = 0
+        
+        // Iterations under 0.8 wma.
+        var iUnderWma = 0
+        
+        // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
+        var thetaValues: [Double] = Array(repeating: 0.5, count: 50)
+        
+        let timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
+            // Grab the motion information.
+            let accelerationData = self!.cmManager.deviceMotion?.userAcceleration
+            
+            // Grab the acceleration vector.
+            if let x = accelerationData?.x, let y = accelerationData?.y, let z = accelerationData?.z {
+                // Convert G's to m/s^2, and assign it to a vector.
+                let currentAcceleration = Vector(
+                    x * 9.81,
+                    y * 9.81,
+                    z * 9.81
+                )
                 
-                // Phone acceleration in the "y" direction.
-                var yAccel = 0.0
+                // Calculate the angle between the current and previous acceleration vector.
+                var theta: Double
+                if previousAcceleration != nil {
+                    theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
+                } else {
+                    // Set current acceleration to the previous acceleration.
+                    previousAcceleration = currentAcceleration
+                    return
+                }
                 
-                // Grab the user's acceleration.
-                if let phoneYAccel = deviceMotion?.userAcceleration.y {
-                    // Convert G's to m/s^2.
-                    yAccel = phoneYAccel * 9.81
+                // Append the current angle and remove the oldest.
+                thetaValues.removeFirst()
+                thetaValues.append(theta)
+                
+                // Give the accelerometer at least one second to grab data.
+                if walking {
+                    self!.userDisplacement += self!.averageVelocity! * self!.updateInterval
+                    self!.displacement.text = String(self!.userDisplacement)
                     
-                    // Values less than a quarter of the average acceleration from configuration are "junk values" (i.e. the user isn't moving).
-                    if abs(yAccel) >= (self!.averageAcceleration * 0.25) {
-                        self!.log.text = "Now walking!\n"
-                        self!.userDisplacement += (self!.updateInterval * self!.averageVelocity!)
+                    //self!.displacement.text = "Walking"
+
+                    // Watch for a long spike in deceleration because it means the user has stopped walking.
+                    if abs(self!.weightedMovingAverage(values: thetaValues)) < 0.825 {
+                        iUnderWma += 1
+                        if iUnderWma >= 5 {
+                            walking = false
+                            //self!.displacement.text = "Not Walking"
+                        }
                     } else {
-                        self!.log.text = "No longer walking!\n"
+                        iUnderWma = 0
+                    }
+                } else {
+                    // Watch for a long spike in acceleration because it means the user has started walking.
+                    if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.825 {
+                        iOverWma += 1
+                        if iOverWma >= 25 {
+                            self!.userDisplacement += self!.averageVelocity! * 0.25
+                            self!.displacement.text = String(self!.userDisplacement)
+                            walking = true
+                        }
+                    } else {
+                        iOverWma = 0
                     }
                 }
                 
-                // Monitor acceleration.
-                self!.displacement.text = String(self!.userDisplacement)
+                // Set current acceleration to the previous acceleration.
+                previousAcceleration = currentAcceleration
+                
+                // Log information.
+                let values = String(iOverWma) + ", " + String(abs(self!.weightedMovingAverage(values: thetaValues))) + "\n"
+                self!.log.text = values + self!.log.text
             }
-        } else {
-            walkingTimer?.invalidate()
-            userDisplacement = 0.0
         }
+        
+        timer.fire()
     }
-
+    
 }
-
