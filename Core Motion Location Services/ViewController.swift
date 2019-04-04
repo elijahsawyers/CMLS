@@ -33,31 +33,27 @@ class ViewController: UIViewController {
             if averageVelocities.count == 3 {
                 averageVelocity = (averageVelocities[0] + averageVelocities[1] + averageVelocities[2])/3.0
                 log.text += "Finished config with avg velocity: \(averageVelocity!)m/s \n"
+                
+                for i in 0..<3 {
+                    avgWMAs[i] /= 100
+                }
+                avgWMA = (avgWMAs[0] + avgWMAs[1] + avgWMAs[2])/3.0
+                log.text += "Finished config with avg wma: \(avgWMA!)m/s \n"
             }
         }
     }
+    
+    /// The average wma during configuration.
+    var avgWMA: Double?
+    
+    /// The average wmas during configuration.
+    var avgWMAs: [Double] = Array(repeating: 0.0, count: 3)
     
     /// Is the user configuring the app?
     var configuring = false
     
     /// The time for one configuration interval.
     var configTime = 0.0
-    
-    /// Avgerage acceleration during configuration.
-    var averageAcceleration = 0.0
-    
-    /// The user's average accelerations pulled during configuration.
-    var averageAccelerations: [Double] = [] {
-        didSet {
-            if averageAccelerations.count == 3 {
-                averageAcceleration = (averageAccelerations[0] + averageAccelerations[1] + averageAccelerations[2])/3.0
-                log.text += "The average acceleration was \(averageAcceleration)\n"
-                log.text += "Press Walk to track distance\n"
-            } else {
-                averageAcceleration = 0.0
-            }
-        }
-    }
     
     /// Timer to configure the user's walking speed.
     var configurationTimer: Timer?
@@ -68,8 +64,11 @@ class ViewController: UIViewController {
     /// Is the user tracking their walking?
     var walking = false
     
-    /// Holds timer that tracks walking.
     var walkingTimer: Timer?
+    
+    var displacementTimer: Timer?
+    
+    var stopLogging = true
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -100,17 +99,51 @@ class ViewController: UIViewController {
         if !configuring {
             log.text += "Walk 4 meters, and press the config button again when done!\n"
             
+            // Previous acceleration.
+            var previousAcceleration: Vector?
+            
+            // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
+            var thetaValues: [Double] = Array(repeating: 0.0, count: 100)
+            
             // Pull accelerometer data for configuration.
-            configurationTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-                self!.configTime += 0.1
+            configurationTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
+                // Increase congig time each interval.
+                self!.configTime += self!.updateInterval
                 
-                // Grab the acceleration information.
-                let deviceMotion = self!.cmManager.deviceMotion
+                // Grab the motion information.
+                let accelerationData = self!.cmManager.deviceMotion?.userAcceleration
                 
-                // Grab the user's acceleration.
-                if let phoneYAccel = deviceMotion?.userAcceleration.y {
-                    // Convert G's to m/s^2.
-                    self!.averageAcceleration += (abs(phoneYAccel) * 9.81)
+                // Grab the acceleration vector.
+                if let x = accelerationData?.x, let y = accelerationData?.y, let z = accelerationData?.z {
+                    // Convert G's to m/s^2, and assign it to a vector.
+                    let currentAcceleration = Vector(
+                        x * 9.81,
+                        y * 9.81,
+                        z * 9.81
+                    )
+                    
+                    // Calculate the angle between the current and previous acceleration vector.
+                    var theta: Double
+                    if previousAcceleration != nil {
+                        theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
+                        print(theta)
+                    } else {
+                        // Set current acceleration to the previous acceleration.
+                        previousAcceleration = currentAcceleration
+                        return
+                    }
+                    
+                    // Append the current angle and remove the oldest.
+                    thetaValues.removeFirst()
+                    thetaValues.append(theta)
+                    
+                    // Compute the average wma during the 1->2 seconds.
+                    if self!.configTime >= 1.0 && self!.configTime <= 2.0 {
+                        self!.avgWMAs[self!.averageVelocities.count] += abs(self!.weightedMovingAverage(values: thetaValues))
+                    }
+                    
+                    // Set current acceleration to the previous acceleration.
+                    previousAcceleration = currentAcceleration
                 }
             }
             
@@ -122,7 +155,6 @@ class ViewController: UIViewController {
             log.text += "You walked \(4.0 / configTime)m/s!\n"
             
             averageVelocities.append(4.0 / configTime)
-            averageAccelerations.append(averageAcceleration/(configTime/0.1))
             
             configuring = false
             configTime = 0.0
@@ -130,6 +162,13 @@ class ViewController: UIViewController {
     }
     
     @IBAction func walk(_ sender: Any) {
+        stopLogging = !stopLogging
+        
+        if stopLogging {
+            walkingTimer?.invalidate()
+            return
+        }
+        
         log.text = ""
         
         // Phone heading.
@@ -153,7 +192,7 @@ class ViewController: UIViewController {
         // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
         var thetaValues: [Double] = Array(repeating: 0.0, count: 100)
         
-        let timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
+        walkingTimer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
             // Grab the motion information.
             let accelerationData = self!.cmManager.deviceMotion?.userAcceleration
             
@@ -170,7 +209,6 @@ class ViewController: UIViewController {
                 var theta: Double
                 if previousAcceleration != nil {
                     theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
-                    print(theta)
                 } else {
                     // Set current acceleration to the previous acceleration.
                     previousAcceleration = currentAcceleration
@@ -183,40 +221,44 @@ class ViewController: UIViewController {
                 
                 // Give the accelerometer at least one second to grab data.
                 if walking {
-                    self!.userDisplacement += self!.averageVelocity! * self!.updateInterval
-                    self!.displacement.text = String(self!.userDisplacement)
-
                     // Watch for a long spike in deceleration because it means the user has stopped walking.
-                    if abs(self!.weightedMovingAverage(values: thetaValues)) < 0.825 {
+                    if abs(self!.weightedMovingAverage(values: thetaValues)) < self!.avgWMA! - 0.15 {
                         iUnderWma += 1
-                        if iUnderWma >= 5 {
+                        if iUnderWma >= 50 {
+                            self!.displacementTimer!.invalidate()
                             walking = false
                             for j in 0..<100 {
-                                thetaValues[j] = 0.5
+                                thetaValues[j] = 0.0
                             }
+                            iUnderWma = 0
                         }
                     } else {
                         iUnderWma = 0
-                        iOverWma = 0
                     }
                 } else {
                     // If the heading is changing, the acceleration change isn't walking.
                     if self!.clManager.heading?.trueHeading != previousHeading {
                         previousHeading = self!.clManager.heading?.trueHeading
                         for j in 0..<100 {
-                            thetaValues[j] = 0.5
+                            thetaValues[j] = 0.0
                         }
                     } else {
                         // Watch for a long spike in acceleration because it means the user has started walking.
-                        if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.775 {
+                        if abs(self!.weightedMovingAverage(values: thetaValues)) > self!.avgWMA! - 0.2 {
                             iOverWma += 1
-                            if iOverWma >= 100 {
-                                self!.userDisplacement += self!.averageVelocity! * 3.0 // Multiply by 3.0s to offset the initial delay of detecting walking.
+                            if iOverWma >= 75 {
+                                // Update displacement to account for the lost distance to detect walking.
+                                self!.userDisplacement += self!.averageVelocity! * 2.0
                                 self!.displacement.text = String(self!.userDisplacement)
                                 walking = true
+                                self!.displacementTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+                                    self!.userDisplacement += self!.averageVelocity!
+                                    self!.displacement.text = String(self!.userDisplacement)
+                                }
+                                self!.displacementTimer!.fire()
+                                iOverWma = 0
                             }
                         } else {
-                            iUnderWma = 0
                             iOverWma = 0
                         }
                     }
@@ -226,15 +268,13 @@ class ViewController: UIViewController {
                 previousAcceleration = currentAcceleration
                 
                 // Log information.
-                if i <= 750 {
-                    let values = String(i) + ", " + String(abs(self!.weightedMovingAverage(values: thetaValues))) + "\n"
-                    self!.log.text = values + self!.log.text
-                    i += 1
-                }
+                let values = String(i) + ", " + String(abs(self!.weightedMovingAverage(values: thetaValues))) + "\n"
+                self!.log.text = values + self!.log.text
+                i += 1
             }
         }
         
-        timer.fire()
+        walkingTimer!.fire()
     }
     
 }
