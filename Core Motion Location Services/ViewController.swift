@@ -8,6 +8,7 @@
 
 import UIKit
 import CoreMotion
+import CoreLocation
 
 class ViewController: UIViewController {
     
@@ -16,6 +17,9 @@ class ViewController: UIViewController {
     
     /// Manages all Core Motion services.
     let cmManager = CMMotionManager()
+    
+    /// Used to grab phone heading.
+    let clManager = CLLocationManager()
     
     /// The time intervals between pulling accelerometer data.
     let updateInterval = 0.01
@@ -73,6 +77,10 @@ class ViewController: UIViewController {
         // Initialize the Core Motion package.
         cmManager.deviceMotionUpdateInterval = updateInterval
         cmManager.startDeviceMotionUpdates()
+        
+        // Initialize the Core Location package.
+        clManager.headingFilter = 45.0
+        clManager.startUpdatingHeading()
     }
     
     func weightedMovingAverage(values: [Double]) -> Double {
@@ -124,6 +132,12 @@ class ViewController: UIViewController {
     @IBAction func walk(_ sender: Any) {
         log.text = ""
         
+        // Phone heading.
+        var previousHeading = clManager.heading?.trueHeading
+        
+        // Iteration.
+        var i = 0
+        
         // Walking.
         var walking = false
         
@@ -137,7 +151,7 @@ class ViewController: UIViewController {
         var iUnderWma = 0
         
         // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
-        var thetaValues: [Double] = Array(repeating: 0.5, count: 50)
+        var thetaValues: [Double] = Array(repeating: 0.0, count: 100)
         
         let timer = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
             // Grab the motion information.
@@ -156,6 +170,7 @@ class ViewController: UIViewController {
                 var theta: Double
                 if previousAcceleration != nil {
                     theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
+                    print(theta)
                 } else {
                     // Set current acceleration to the previous acceleration.
                     previousAcceleration = currentAcceleration
@@ -170,30 +185,40 @@ class ViewController: UIViewController {
                 if walking {
                     self!.userDisplacement += self!.averageVelocity! * self!.updateInterval
                     self!.displacement.text = String(self!.userDisplacement)
-                    
-                    //self!.displacement.text = "Walking"
 
                     // Watch for a long spike in deceleration because it means the user has stopped walking.
                     if abs(self!.weightedMovingAverage(values: thetaValues)) < 0.825 {
                         iUnderWma += 1
                         if iUnderWma >= 5 {
                             walking = false
-                            //self!.displacement.text = "Not Walking"
+                            for j in 0..<100 {
+                                thetaValues[j] = 0.5
+                            }
                         }
                     } else {
                         iUnderWma = 0
+                        iOverWma = 0
                     }
                 } else {
-                    // Watch for a long spike in acceleration because it means the user has started walking.
-                    if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.825 {
-                        iOverWma += 1
-                        if iOverWma >= 25 {
-                            self!.userDisplacement += self!.averageVelocity! * 0.25
-                            self!.displacement.text = String(self!.userDisplacement)
-                            walking = true
+                    // If the heading is changing, the acceleration change isn't walking.
+                    if self!.clManager.heading?.trueHeading != previousHeading {
+                        previousHeading = self!.clManager.heading?.trueHeading
+                        for j in 0..<100 {
+                            thetaValues[j] = 0.5
                         }
                     } else {
-                        iOverWma = 0
+                        // Watch for a long spike in acceleration because it means the user has started walking.
+                        if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.775 {
+                            iOverWma += 1
+                            if iOverWma >= 100 {
+                                self!.userDisplacement += self!.averageVelocity! * 3.0 // Multiply by 3.0s to offset the initial delay of detecting walking.
+                                self!.displacement.text = String(self!.userDisplacement)
+                                walking = true
+                            }
+                        } else {
+                            iUnderWma = 0
+                            iOverWma = 0
+                        }
                     }
                 }
                 
@@ -201,8 +226,11 @@ class ViewController: UIViewController {
                 previousAcceleration = currentAcceleration
                 
                 // Log information.
-                let values = String(iOverWma) + ", " + String(abs(self!.weightedMovingAverage(values: thetaValues))) + "\n"
-                self!.log.text = values + self!.log.text
+                if i <= 750 {
+                    let values = String(i) + ", " + String(abs(self!.weightedMovingAverage(values: thetaValues))) + "\n"
+                    self!.log.text = values + self!.log.text
+                    i += 1
+                }
             }
         }
         
