@@ -84,10 +84,10 @@ class ViewController: UIViewController {
         // Previous acceleration.
         var previousAcceleration: Vector?
         
-        // Keep track of time above 0.8.
+        // Keep track of time above 0.75.
         var timeAbove = 0.0
         
-        // Has the wma been above 0.8 for more than one second?
+        // Has the wma been above 0.75 for more than one second?
         var timeAboveOneSec = 0.0
         
         // Is the user walking?
@@ -126,8 +126,8 @@ class ViewController: UIViewController {
                 thetaValues.removeFirst()
                 thetaValues.append(theta)
                 
-                // Keep up with wma time above 0.8.
-                if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.8 {
+                // Keep up with wma time above 0.75.
+                if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.75 {
                     timeAbove += self!.updateInterval
                     if timeAbove >= 1.0 {
                         timeAboveOneSec = 1.0
