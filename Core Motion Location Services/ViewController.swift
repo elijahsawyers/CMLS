@@ -126,7 +126,6 @@ class ViewController: UIViewController {
                     var theta: Double
                     if previousAcceleration != nil {
                         theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
-                        print(theta)
                     } else {
                         // Set current acceleration to the previous acceleration.
                         previousAcceleration = currentAcceleration
@@ -171,23 +170,26 @@ class ViewController: UIViewController {
         
         log.text = ""
         
-        // Phone heading.
-        var previousHeading = clManager.heading?.trueHeading
+        // Create ML model to predict whether or not the user is walking.
+        let model = Walking()
         
         // Iteration.
         var i = 0
         
-        // Walking.
-        var walking = false
-        
         // Previous acceleration.
         var previousAcceleration: Vector?
         
-        // Iterations over 0.8 wma.
-        var iOverWma = 0
+        // Keep track of time above 0.8.
+        var timeAbove = 0.0
         
-        // Iterations under 0.8 wma.
-        var iUnderWma = 0
+        // Has the wma been above 0.8 for more than one second?
+        var timeAboveOneSec = 0.0
+        
+        // Walking?
+        var walking = false
+        
+        // Timer to update displacement, if the user is walking.
+        var displacementTimer: Timer?
         
         // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
         var thetaValues: [Double] = Array(repeating: 0.0, count: 100)
@@ -219,49 +221,45 @@ class ViewController: UIViewController {
                 thetaValues.removeFirst()
                 thetaValues.append(theta)
                 
-                // Give the accelerometer at least one second to grab data.
-                if walking {
-                    // Watch for a long spike in deceleration because it means the user has stopped walking.
-                    if abs(self!.weightedMovingAverage(values: thetaValues)) < self!.avgWMA! - 0.15 {
-                        iUnderWma += 1
-                        if iUnderWma >= 50 {
-                            self!.displacementTimer!.invalidate()
-                            walking = false
-                            for j in 0..<100 {
-                                thetaValues[j] = 0.0
-                            }
-                            iUnderWma = 0
-                        }
+                // Keep up with wma time above 0.8
+                if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.8 {
+                    timeAbove += self!.updateInterval
+                    if timeAbove >= 1.0 {
+                        timeAboveOneSec = 1.0
                     } else {
-                        iUnderWma = 0
+                        timeAboveOneSec = 0.0
                     }
                 } else {
-                    // If the heading is changing, the acceleration change isn't walking.
-                    if self!.clManager.heading?.trueHeading != previousHeading {
-                        previousHeading = self!.clManager.heading?.trueHeading
-                        for j in 0..<100 {
-                            thetaValues[j] = 0.0
+                    timeAbove = 0.0
+                    timeAboveOneSec = 0.0
+                }
+                
+                // Is the user walking?
+                guard let walkingPrediction = try? model.prediction(wma: abs(self!.weightedMovingAverage(values: thetaValues)), time_above: timeAbove, time_above_1: timeAboveOneSec) else {
+                    return
+                }
+                
+                // If the user is walking...
+                if walkingPrediction.walking == 1 {
+                    //...and wasn't previously walking...
+                    if !walking {
+                        //...set the walking flag...
+                        walking = true
+                        
+                        //...update displacement...
+                        self!.userDisplacement += self!.averageVelocity!
+                        
+                        //...and start a timer to update displacement every 1.0s.
+                        displacementTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+                            self!.userDisplacement += self!.averageVelocity!
+                            self!.displacement.text = String(self!.userDisplacement)
                         }
-                    } else {
-                        // Watch for a long spike in acceleration because it means the user has started walking.
-                        if abs(self!.weightedMovingAverage(values: thetaValues)) > self!.avgWMA! - 0.2 {
-                            iOverWma += 1
-                            if iOverWma >= 75 {
-                                // Update displacement to account for the lost distance to detect walking.
-                                self!.userDisplacement += self!.averageVelocity! * 2.0
-                                self!.displacement.text = String(self!.userDisplacement)
-                                walking = true
-                                self!.displacementTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
-                                    self!.userDisplacement += self!.averageVelocity!
-                                    self!.displacement.text = String(self!.userDisplacement)
-                                }
-                                self!.displacementTimer!.fire()
-                                iOverWma = 0
-                            }
-                        } else {
-                            iOverWma = 0
-                        }
+                        displacementTimer!.fire()
                     }
+                } else {
+                    // If the user isn't walking, invalidate the displacement timer, if need be, and set the walking flag to false.
+                    displacementTimer?.invalidate()
+                    walking = false
                 }
                 
                 // Set current acceleration to the previous acceleration.
