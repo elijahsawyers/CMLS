@@ -23,6 +23,10 @@ class Vector {
     func dotProduct(vector: Vector) -> Double {
         let numerator = (self.x * vector.x) + (self.y * vector.y) + (self.z * vector.z)
         let denomenator = sqrt((self.x * self.x) + (self.y * self.y) + (self.z * self.z)) * sqrt((vector.x * vector.x) + (vector.y * vector.y) + (vector.z * vector.z))
-        return (numerator/denomenator)
+        if denomenator != 0 {
+            return (numerator/denomenator)
+        } else {
+            return 1
+        }
     }
 }

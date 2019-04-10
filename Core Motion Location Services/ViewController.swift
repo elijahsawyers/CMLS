@@ -12,7 +12,7 @@ import CoreLocation
 
 class ViewController: UIViewController {
     
-    /// Outlet to the label that display's displacement in meters.
+    /// Outlet to the label that displays the user's displacement in meters.
     @IBOutlet weak var displacement: UILabel!
     
     /// Outlet to the log of walking data.
@@ -24,7 +24,7 @@ class ViewController: UIViewController {
     /// The time intervals between receiving accelerometer data.
     let updateInterval = 0.01
     
-    /// The user's average walking speed, based on world average.
+    /// The user's average walking speed, based on average.
     var averageVelocity = 1.25
     
     /// Stores the user's displacement, in meters.
@@ -33,13 +33,13 @@ class ViewController: UIViewController {
     /// Is the user currently walking?
     var walking = false
     
-    /// When the walk button is pressed, this timer receives IMU updates.
+    /// When the walk button is pressed, this timer's block receives IMU updates in defined intervals.
     var imuInterval: Timer?
     
     /// Updates the user's displacement, if walking.
     var walkingTimer: Timer?
     
-    /// When the walk button is pressed a second time, it stops the flow of walking data so that it can be pulled.
+    /// When the walk button is pressed while walking, it stops the flow of walking data so that it can be pulled.
     var stopLogging = true
 
     override func viewDidLoad() {
@@ -68,15 +68,12 @@ class ViewController: UIViewController {
     
     /// When the walk button is pressed, log walking data, and update user displacement.
     @IBAction func walk(_ sender: Any) {
+        // If the walk button is pressed while walking, it stops the timer.
         stopLogging = !stopLogging
-        
         if stopLogging {
             imuInterval?.invalidate()
             return
         }
-        
-        // Create ML model to predict whether or not the user is walking.
-        let model = Walking()
         
         // Current iteration.
         var i = 0
@@ -84,11 +81,8 @@ class ViewController: UIViewController {
         // Previous acceleration.
         var previousAcceleration: Vector?
         
-        // Keep track of time above 0.75.
-        var timeAbove = 0.0
-        
-        // Has the wma been above 0.75 for more than one second?
-        var timeAboveOneSec = 0.0
+        // Keep track of time below 1.0.
+        var timeBelow = 0.0
         
         // Is the user walking?
         var walking = false
@@ -97,14 +91,22 @@ class ViewController: UIViewController {
         var walkingTimer: Timer?
         
         // To try to eliminate "noise," we use a moving average for the angle between current and previous acceleration vectors.
-        var thetaValues: [Double] = Array(repeating: 0.0, count: 100)
+        var thetaValues: [Double] = Array(repeating: 1.0, count: 100)
         
         imuInterval = Timer.scheduledTimer(withTimeInterval: updateInterval, repeats: true) { [weak self] timer in
             // Grab the motion information.
             let accelerationData = self!.cmManager.deviceMotion?.userAcceleration
             
             // Grab the acceleration vector.
-            if let x = accelerationData?.x, let y = accelerationData?.y, let z = accelerationData?.z {
+            if var x = accelerationData?.x, var y = accelerationData?.y, var z = accelerationData?.z {
+                
+                // The phone is motionless.
+                if x < 0.1 && y < 0.1 &&  z < 0.1 {
+                    x = 0
+                    y = 0
+                    z = 0
+                }
+                
                 // Convert G's to m/s^2, and assign it to a vector.
                 let currentAcceleration = Vector(
                     x * 9.81,
@@ -116,8 +118,8 @@ class ViewController: UIViewController {
                 var theta: Double
                 if previousAcceleration != nil {
                     theta = currentAcceleration.dotProduct(vector: previousAcceleration!)
+                    print(theta)
                 } else {
-                    // Set current acceleration to the previous acceleration.
                     previousAcceleration = currentAcceleration
                     return
                 }
@@ -127,32 +129,12 @@ class ViewController: UIViewController {
                 thetaValues.append(theta)
                 
                 // Keep up with wma time above 0.75.
-                if abs(self!.weightedMovingAverage(values: thetaValues)) > 0.75 {
-                    timeAbove += self!.updateInterval
-                    if timeAbove >= 1.0 {
-                        timeAboveOneSec = 1.0
-                    } else {
-                        timeAboveOneSec = 0.0
-                    }
-                } else {
-                    timeAbove = 0.0
-                    timeAboveOneSec = 0.0
-                }
-                
-                // Use the ML model to determine if the user is walking.
-                guard let walkingPrediction = try? model.prediction(wma: abs(self!.weightedMovingAverage(values: thetaValues)), time_above: timeAbove, time_above_1: timeAboveOneSec) else {
-                    return
-                }
-                
-                // If the user is walking...
-                if walkingPrediction.walking == 1 {
-                    //...and wasn't previously walking...
-                    if !walking {
-                        //...set the walking flag...
-                        walking = true
-                        
+                if abs(self!.weightedMovingAverage(values: thetaValues)) < 1.0 {
+                    timeBelow += self!.updateInterval
+                    self!.log.text = String(timeBelow)
+                    if timeBelow >= 5.0 && !walking {
                         //...update displacement...
-                        self!.userDisplacement += self!.averageVelocity
+                        self!.userDisplacement += self!.averageVelocity * 2
                         
                         //...and start a timer to update displacement every 1.0s.
                         walkingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
@@ -160,11 +142,12 @@ class ViewController: UIViewController {
                             self!.displacement.text = String(self!.userDisplacement)
                         }
                         walkingTimer!.fire()
+                        walking = true
                     }
                 } else {
-                    // If the user isn't walking, invalidate the displacement timer, if need be, and set the walking flag to false.
                     walkingTimer?.invalidate()
                     walking = false
+                    timeBelow = 0.0
                 }
                 
                 // Set current acceleration to the previous acceleration.
